@@ -8,29 +8,25 @@ import org.http4s.{Method, Request, Uri}
 import org.http4s.client.Client
 import org.http4s.client.dsl.Http4sClientDsl
 
-/**
-  * Service to communicate with Git REST
-  *
-  * @tparam F
-  *
-  *
-  */
+import GitServices._
 
 trait GitService[F[_]] {
-  type GitResp[R] = Either[AppError, List[R]]
+
 
   /**
     * Look up organization contributors who contribute to organization repos.
     * First request repos list that belong to the organization, then we request for each repos contributors list.
     *
     * @param organizationName
-    * @return contributors ordered by contributions in acsending order
+    * @return contributors ordered by contributions in ascending order
     */
   def findOrganizationContributors(organizationName: String): F[GitResp[OrganizationContributor]]
 }
 
 
 object GitServices {
+  type GitResp[R] = Either[AppError, List[R]]
+
   /**
     * Create [[GitService]] implementation
     *
@@ -39,7 +35,7 @@ object GitServices {
     * @tparam F
     * @return
     */
-  def service[F[_] : Sync : ConcurrentEffect](appConfig: AppConfig, client: Client[F]): GitService[F] = new GitService[F] {
+  def service[F[_] : ConcurrentEffect](appConfig: AppConfig, client: Client[F]): GitService[F] = new GitService[F] {
     val dsl = new Http4sClientDsl[F] {}
 
     import dsl._
@@ -48,7 +44,7 @@ object GitServices {
       * Look up organization contributors.First request repo list.
       *
       * @param organizationName
-      * @return contributors ordered by contributions in acsending order
+      * @return contributors ordered by contributions in ascending order
       */
     override def findOrganizationContributors(organizationName: String): F[GitResp[OrganizationContributor]] = {
       //find organization repos
@@ -62,16 +58,11 @@ object GitServices {
             for {
               contribs <- listContribsOr
             } yield {
-              val loginToContributions = scala.collection.mutable.HashMap[String, Int]()
-              //go with while.
-              // it's more optimal then with List.groupBy to avoid creating intermidiate collections
-              val contribIter = contribs.iterator
-              while (contribIter.hasNext) {
-                val repoContrib = contribIter.next()
-                val contributions = loginToContributions.getOrElseUpdate(repoContrib.login, 0)
-                loginToContributions.put(repoContrib.login, contributions + 1)
+              val pairOfLoginFrequency = contribs.foldLeft(List.empty[(String, Int)]) { (acc, repoContributor) =>
+                 (repoContributor.login -> 1) :: acc
               }
-              val orgContributors = loginToContributions.map { case (login, count) => OrganizationContributor(login, count) }
+              val loginToFreq = pairOfLoginFrequency.groupBy(_._1).map(kv => kv._1 -> kv._2.map(_._2).sum)
+              val orgContributors = loginToFreq.map(kv => OrganizationContributor(kv._1, kv._2))
               orgContributors.toList.sortBy(_.contributions)
             }
           }
@@ -94,7 +85,7 @@ object GitServices {
     }
 
     /**
-      * Find organization repos. Run requesting repos sequencently to get all page by page.
+      * Find organization repos. Run requesting repos sequenced to get all page by page.
       *
       * @param organizationName
       * @return
@@ -106,7 +97,7 @@ object GitServices {
 
     /**
       * Find repo contributors.Run requesting data concurrently for every organization repos.
-      * Use fiber abstraction to run every task in configured executio contexts.
+      * Use fiber abstraction to run every task in configured execution contexts.
       *
       * @param organizationName
       * @param repos
